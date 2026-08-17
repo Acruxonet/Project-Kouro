@@ -1,6 +1,6 @@
 # Project-Kouro
 
-面向 CVPR 2027 的机器人 policy idea 与实验工作台。仓库负责统一管理可训练数据、可魔改
+面向 CVPR 2027 的机器人 policy idea 与实验工作台。仓库负责统一管理可训练数据、可修改
 policy、实验定义、checkpoint 和 RoboCasa 评测，使模型结构、归一化、反归一化与 loss 都能
 在当前工作区内直接查看和修改。
 
