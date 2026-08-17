@@ -1,0 +1,21 @@
+# Large local datasets and training artifacts are reproducible and stay off Git.
+/data/robocasa365/
+/checkpoints/*
+!/checkpoints/README.md
+
+# Bundled runtime artifacts are stored on the shared disk but not in Git.
+/artifacts/pretrained/*.pth
+/artifacts/wheels/*.whl
+
+# Per-experiment Markdown/config snapshots stay visible; generated logs do not.
+/experiments/*/tensorboard/
+/experiments/*/train.log
+/experiments/*/eval/*/eval.log
+/experiments/*/eval/*/videos/
+
+# Python and experiment-tool caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.cache/
