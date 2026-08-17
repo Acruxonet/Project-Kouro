@@ -63,6 +63,31 @@ RoboCasa 训练/评测 adapter 见 [`environment/README.md`](environment/README.
 state 包含四元数时，数据缓存和环境 adapter 会使用同一种 rotation 6D 转换；
 RoboCasa 控制器要求的 12D action 保持不变。
 
+## DSW 上的 tmux
+
+阿里云 DSW Web Terminal 会管理默认 tmux server，并注入平台自己的 `TMUX_BINARY` 和
+`TMUX_CONFIG`。系统 tmux 连接这个默认 socket 创建 detached session 时，可能在训练命令
+执行前直接打印 `server exited unexpectedly`。使用 `tmux -f /dev/null -L <socket>` 建立
+隔离 server 能正常工作，说明这不是 policy、训练配置或 GPU 初始化错误，而是 DSW 默认
+tmux 环境的冲突。
+
+仓库的训练和独立评测 launcher 因此不使用默认 server，而是为每个 session 建立同名的独立
+socket，并忽略平台 tmux 配置。启动命令不需要额外参数；launcher 会打印正确的 attach 命令：
+
+```bash
+tmux -L <session_name> attach -t <session_name>
+```
+
+状态和停止脚本会自动查找独立 socket，同时兼容修复前已经在默认 socket 中启动的 session：
+
+```bash
+bash scripts/tmux_status.sh <session_name>
+bash scripts/tmux_stop.sh <session_name>
+```
+
+若训练进程在 preflight 阶段立即失败，tmux pane 会保持 dead 状态并保留 stderr；用 status
+脚本即可查看真实错误，不会再只剩 `server exited unexpectedly`。
+
 ## 输出边界
 
 实验说明和结果归属于 `experiments/`；模型权重归属于 `checkpoints/`；可重复构建的容器本地

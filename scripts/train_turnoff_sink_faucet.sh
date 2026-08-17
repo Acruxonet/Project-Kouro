@@ -34,7 +34,10 @@ kouro_policy_validate_config() { :; }
 kouro_policy_prepare_local_artifacts() { :; }
 kouro_policy_append_selector_args() {
     local -n target_args=$1
-    target_args+=(--policy.type="$policy_type")
+    target_args+=(
+        --policy.discover_packages_path="lerobot.policies.$policy_type"
+        --policy.type="$policy_type"
+    )
 }
 kouro_policy_append_train_args() { :; }
 kouro_policy_append_required_modules() { :; }
@@ -92,7 +95,6 @@ kouro_policy_append_train_args policy_train_args
 
 train_command=(
     "$python_bin" -m lerobot.scripts.lerobot_train
-    --policy.discover_packages_path="lerobot.policies.$policy_type"
     "${policy_selector_args[@]}"
     --policy.device=cuda
     --policy.use_amp="$KOURO_USE_AMP"
@@ -183,6 +185,7 @@ fi
 mkdir -p "$experiment_dir/environment_snapshot"
 cp -a -- "$project_root/environment/"*.py "$experiment_dir/environment_snapshot/"
 command_snapshot=$(printf '%q ' "${train_command[@]}")
+command_snapshot=${command_snapshot% }
 {
     printf '\n## 本次实际展开命令\n\n'
     printf -- '- 启动时间：`%s`\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

@@ -15,7 +15,9 @@ command -v tmux >/dev/null 2>&1 || kouro_die "tmux is not installed in this cont
 
 session_name=${KOURO_TMUX_SESSION:-kouro-eval-$run_id}
 kouro_validate_id "$session_name" tmux_session
-tmux has-session -t "$session_name" 2>/dev/null && kouro_die "tmux session already exists: $session_name"
+tmux_cmd=(tmux -f /dev/null -L "$session_name")
+"${tmux_cmd[@]}" has-session -t "$session_name" 2>/dev/null && \
+    kouro_die "tmux session already exists: $session_name"
 
 eval_argv=(env "KOURO_EXPERIMENT=$(basename -- "$experiment_dir")")
 while IFS= read -r variable_name; do
@@ -27,13 +29,26 @@ printf -v eval_shell 'cd %q && ' "$project_root"
 printf -v eval_joined '%q ' "${eval_argv[@]}"
 eval_shell+="$eval_joined"
 
-tmux new-session -d -s "$session_name" -n eval "$eval_shell"
-tmux set-option -t "$session_name" remain-on-exit on >/dev/null
-tmux set-option -t "$session_name" history-limit 100000 >/dev/null
-tmux set-option -t "$session_name" @kouro_run_id "$run_id" >/dev/null
-tmux set-option -t "$session_name" @kouro_experiment_dir "$experiment_dir" >/dev/null
+session_created=false
+cleanup_incomplete_session() {
+    if $session_created; then
+        "${tmux_cmd[@]}" kill-session -t "$session_name" 2>/dev/null || true
+    fi
+}
+trap cleanup_incomplete_session EXIT
+
+# Keep the pane alive while configuring it so fast failures remain inspectable.
+"${tmux_cmd[@]}" new-session -d -s "$session_name" -n eval 'exec sleep 2147483647'
+session_created=true
+"${tmux_cmd[@]}" set-option -w -t "$session_name:eval" remain-on-exit on >/dev/null
+"${tmux_cmd[@]}" set-option -w -t "$session_name:eval" history-limit 100000 >/dev/null
+"${tmux_cmd[@]}" set-option -t "$session_name" @kouro_run_id "$run_id" >/dev/null
+"${tmux_cmd[@]}" set-option -t "$session_name" @kouro_experiment_dir "$experiment_dir" >/dev/null
+"${tmux_cmd[@]}" respawn-pane -k -t "$session_name:eval" "$eval_shell"
+session_created=false
+trap - EXIT
 
 printf 'Started RoboCasa evaluation.\n'
 printf '  experiment:   %s\n' "$run_id"
 printf '  tmux session: %s\n' "$session_name"
-printf '  attach:       tmux attach -t %s\n' "$session_name"
+printf '  attach:       tmux -L %s attach -t %s\n' "$session_name" "$session_name"

@@ -17,12 +17,12 @@ LeRobot ACT，得到 action-chunking transformer baseline。这里保留原始 C
 - 任务名：`TurnOffSinkFaucet`。
 - 训练数据 split：`pretrain`；RoboCasa eval split：`pretrain`。
 - 评测 object registries：`[objaverse, lightwheel]`。
-- 训练中评测：每 10,000 steps 做 5 episodes。
+- 训练中评测：每 2,000 steps 做 5 episodes。
 - 最终评测：训练结束后自动做 50 episodes。
 
 任务目标是关闭正在出水的水龙头。本实验使用前 100 个 episode，共 11,608 frames；ACT
-不配置 `drop_n_last_frames`，所以每一帧都可作为训练 anchor。100k steps、batch size 8 约为
-69 次 dataset pass。episode 尾部不足 100 步的 action chunk 由 dataset loader 复制最后一个
+不配置 `drop_n_last_frames`，所以每一帧都可作为训练 anchor。20k steps、batch size 32 约为
+55 次 dataset pass。episode 尾部不足 64 步的 action chunk 由 dataset loader 复制最后一个
 action padding，但 ACT loss 会用 `action_is_pad` 排除这些位置。
 
 ## 数据
@@ -96,14 +96,14 @@ ImageNet-1K 初始化权重。
 
 ## 数据流与张量 shape
 
-当前 `batch_size=8`、`n_obs_steps=1`：
+当前 `batch_size=32`、`n_obs_steps=1`：
 
 | 输入 | Shape | 进入的模块 |
 | --- | --- | --- |
-| `observation.state` | `(8,20)` | CVAE state projection 与主 encoder state token |
-| 三个 `observation.images.*` | 每个 `(8,3,256,256)` | 共享 ResNet18 |
-| `action` | `(8,100,12)` | CVAE action tokens 与 L1 target |
-| `action_is_pad` | `(8,100)` | CVAE attention mask 与 L1 valid mask |
+| `observation.state` | `(32,20)` | CVAE state projection 与主 encoder state token |
+| 三个 `observation.images.*` | 每个 `(32,3,256,256)` | 共享 ResNet18 |
+| `action` | `(32,64,12)` | CVAE action tokens 与 L1 target |
+| `action_is_pad` | `(32,64)` | CVAE attention mask 与 L1 valid mask |
 
 ### 1. Normalize processor
 
@@ -123,9 +123,9 @@ dataset mean/std，不是固定 ImageNet mean/std。常量 action 维度的 `std
 三个相机逐个经过同一套 ResNet18 权重，而不是三个独立 backbone：
 
 ```text
-每个 camera: (8,3,256,256)
-  -> shared ResNet18, remove avgpool/fc: (8,512,8,8)
-  -> shared 1x1 Conv 512->512:          (8,512,8,8)
+每个 camera: (32,3,256,256)
+  -> shared ResNet18, remove avgpool/fc: (32,512,8,8)
+  -> shared 1x1 Conv 512->512:          (32,512,8,8)
   -> flatten spatial tokens:            64 tokens × 512D
 ```
 
@@ -148,7 +148,7 @@ backbone。`ACT.__init__()` 只建立一次 `self.backbone`，forward 再遍历�
 CVAE 输入 token 序列为：
 
 ```text
-[learned CLS, state20->512, 100 × action12->512] = 102 tokens × 512D
+[learned CLS, state20->512, 64 × action12->512] = 66 tokens × 512D
 ```
 
 4 层 VAE Transformer encoder 使用 hidden 512、8 heads、FFN 3200、dropout 0.1。CLS 输出
@@ -175,17 +175,17 @@ z = mu + exp(log_sigma_x2 / 2) * epsilon_z,  epsilon_z ~ N(0,I)
 
 ### 5. Transformer decoder 与 action head
 
-100 个 learnable query embedding 对应 chunk 中的 100 个未来 action 位置。当前实现用 1 层
+64 个 learnable query embedding 对应 chunk 中的 64 个未来 action 位置。当前实现用 1 层
 decoder：query self-attention、对 encoder memory 的 cross-attention、FFN 3200，最后
-`Linear(512,12)` 输出 `(B,100,12)`。
+`Linear(512,12)` 输出 `(B,64,12)`。
 
 配置中的 1 层是 LeRobot 对原始 ACT 行为的兼容选择：原始实现虽然声明 7 层，但历史 bug
-实际只使用首层。当前 `temporal_ensemble_coeff=null`；rollout 每次预测 100 步并全部放入
-queue，在 20 Hz 下最多 open-loop 执行约 5 秒后再规划。
+实际只使用首层。当前 `temporal_ensemble_coeff=null`；rollout 每次预测 64 步，仅将前
+32 步放入 queue，在 20 Hz 下 open-loop 执行约 1.6 秒后重新观测和规划。
 
 ## 模块与参数量
 
-参数量按三相机、state20、action12、chunk100 的真实模型实例统计。视觉 backbone 在三个相机
+参数量按三相机、state20、action12、chunk64 的真实模型实例统计。视觉 backbone 在三个相机
 之间共享，所以只计算一次。
 
 | 模块 | 结构 | 参数量 |
@@ -200,12 +200,12 @@ queue，在 20 Hz 下最多 open-loop 执行约 5 秒后再规划。
 | latent input projection | Linear 32→512 | 16,896 |
 | image feature projection | Conv2d 512→512, kernel 1 | 262,656 |
 | encoder 1D position embeddings | 2×512 | 1,024 |
-| decoder query embeddings | 100×512 | 51,200 |
+| decoder query embeddings | 64×512 | 32,768 |
 | action head | Linear 512→12 | 6,156 |
-| **输入/输出投影小计** | 上述六项 | **348,684** |
-| **Policy 总计** | 所有 trainable parameters | **51,617,676（51.62M）** |
+| **输入/输出投影小计** | 上述六项 | **330,252** |
+| **Policy 总计** | 所有 trainable parameters | **51,599,244（51.60M）** |
 
-所有 51,617,676 个参数当前均 `requires_grad=true`。无参数模块包括 2D/sinusoidal position
+所有 51,599,244 个参数当前均 `requires_grad=true`。无参数模块包括 2D/sinusoidal position
 encoding、action queue、normalizer 的统计逻辑和 `action_is_pad` mask。
 
 ## Loss 计算
@@ -236,17 +236,17 @@ group，但本配置 `optimizer_lr_backbone=1e-5`，与其余模型相同。
 
 | 参数 | 值 |
 | --- | ---: |
-| training steps | 100,000 |
-| batch size | 8 |
+| training steps | 20,000 |
+| batch size | 32 |
 | DataLoader workers | 8 |
 | seed | 42 |
 | state rotation | rotation 6D |
-| `chunk_size` | 100 |
-| `n_action_steps` | 100 |
+| `chunk_size` | 64 |
+| `n_action_steps` | 32 |
 | hidden / heads / FFN | 512 / 8 / 3200 |
 | main encoder / decoder layers | 4 / 1 |
 | VAE encoder layers / latent | 4 / 32 |
-| checkpoint + inline eval interval | 10,000 steps |
+| checkpoint + inline eval interval | 2,000 steps |
 | inline / final eval episodes | 5 / 50 |
 
 修改 action horizon 编辑 [`config.env`](config.env) 的 `KOURO_ACT_CHUNK_SIZE` 和
@@ -281,3 +281,15 @@ bash scripts/train_turnoff_sink_faucet.sh --dry-run
 - 冻结代码：`policy_snapshot/`、`policy_adapter_snapshot.sh`、`environment_snapshot/`；
 - 训练监控：`train.log`、`status.env`、`tensorboard/`；
 - RoboCasa 结果：`eval/<timestamp>/`。
+
+## 本次实际展开命令
+
+- 启动时间：`2026-08-17T14:19:45Z`
+- Dataset cache：`/tmp/project-kouro-cache/data/TurnOffSinkFaucet/20250819/bb573179495466bd/lerobot`
+- Code cache：`/tmp/project-kouro-cache/code/lerobot-d2d4f33a3555-kouro-37838b37bd61`
+- Policy：`act` from `/mnt/data/nas/hufangchi/projects/project_kouro/policy/act`
+- Checkpoint：`/mnt/data/nas/hufangchi/projects/project_kouro/checkpoints/robocasa/TurnOffSinkFaucet/act/ACT_TurnOffSinkFaucet_baseline`
+
+```bash
+/mnt/data/nas/hufangchi/applications/conda_envs/Robotwin/bin/python3.12 -m lerobot.scripts.lerobot_train --policy.discover_packages_path=lerobot.policies.act --policy.type=act --policy.device=cuda --policy.use_amp=false --policy.push_to_hub=false --policy.chunk_size=64 --policy.n_action_steps=32 --policy.vision_backbone=resnet18 --policy.pretrained_backbone_weights=ResNet18_Weights.IMAGENET1K_V1 --policy.use_vae=true --policy.kl_weight=10.0 --dataset.repo_id=project_kouro/robocasa_TurnOffSinkFaucet --dataset.root=/tmp/project-kouro-cache/data/TurnOffSinkFaucet/20250819/bb573179495466bd/lerobot --dataset.episodes=\[0\,1\,2\,3\,4\,5\,6\,7\,8\,9\,10\,11\,12\,13\,14\,15\,16\,17\,18\,19\,20\,21\,22\,23\,24\,25\,26\,27\,28\,29\,30\,31\,32\,33\,34\,35\,36\,37\,38\,39\,40\,41\,42\,43\,44\,45\,46\,47\,48\,49\,50\,51\,52\,53\,54\,55\,56\,57\,58\,59\,60\,61\,62\,63\,64\,65\,66\,67\,68\,69\,70\,71\,72\,73\,74\,75\,76\,77\,78\,79\,80\,81\,82\,83\,84\,85\,86\,87\,88\,89\,90\,91\,92\,93\,94\,95\,96\,97\,98\,99\] --dataset.video_backend=pyav --env.type=robocasa --env.task=TurnOffSinkFaucet --env.split=pretrain --env.obj_registries=\[objaverse\,lightwheel\] --output_dir=/mnt/data/nas/hufangchi/projects/project_kouro/checkpoints/robocasa/TurnOffSinkFaucet/act/ACT_TurnOffSinkFaucet_baseline --job_name=ACT_TurnOffSinkFaucet_baseline --steps=20000 --batch_size=32 --num_workers=8 --prefetch_factor=4 --persistent_workers=true --log_freq=100 --save_freq=2000 --eval_freq=2000 --eval.batch_size=1 --eval.n_episodes=5 --eval.use_async_envs=false --seed=42 --wandb.enable=false
+```

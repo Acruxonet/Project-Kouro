@@ -352,9 +352,9 @@ bash scripts/train_turnoff_sink_faucet.sh --dry-run
 启动脚本会打印实际 tmux session 名。常用命令：
 
 ```bash
-tmux attach -t kouro-DP-TurnOffSinkFaucet-baseline
-bash scripts/tmux_status.sh kouro-DP-TurnOffSinkFaucet-baseline
-bash scripts/tmux_stop.sh kouro-DP-TurnOffSinkFaucet-baseline
+tmux -L kouro-DP_TurnOffSinkFaucet_baseline attach -t kouro-DP_TurnOffSinkFaucet_baseline
+bash scripts/tmux_status.sh kouro-DP_TurnOffSinkFaucet_baseline
+bash scripts/tmux_stop.sh kouro-DP_TurnOffSinkFaucet_baseline
 ```
 
 TensorBoard 默认监听 `0.0.0.0:6006`。若训练在远程机器上，可建立 SSH 端口转发后打开
@@ -391,3 +391,15 @@ rollout 视频，并追加到 TensorBoard。
 - RoboCasa 结果：`eval/<timestamp>/`。
 
 训练启动时，脚本还会在本文件末尾追加本次实际展开的 LeRobot 命令和缓存路径。
+
+## 本次实际展开命令
+
+- 启动时间：`2026-08-17T13:28:00Z`
+- Dataset cache：`/tmp/project-kouro-cache/data/TurnOffSinkFaucet/20250819/bb573179495466bd/lerobot`
+- Code cache：`/tmp/project-kouro-cache/code/lerobot-d2d4f33a3555-kouro-31351ae7870e`
+- Policy：`diffusion` from `/mnt/data/nas/hufangchi/projects/project_kouro/policy/diffusion`
+- Checkpoint：`/mnt/data/nas/hufangchi/projects/project_kouro/checkpoints/robocasa/TurnOffSinkFaucet/diffusion/DP_TurnOffSinkFaucet_baseline`
+
+```bash
+/mnt/data/nas/hufangchi/applications/conda_envs/Robotwin/bin/python3.12 -m lerobot.scripts.lerobot_train --policy.discover_packages_path=lerobot.policies.diffusion --policy.type=diffusion --policy.device=cuda --policy.use_amp=false --policy.push_to_hub=false --policy.pretrained_backbone_weights=ResNet18_Weights.IMAGENET1K_V1 --policy.n_obs_steps=2 --policy.horizon=64 --policy.n_action_steps=32 --policy.drop_n_last_frames=7 --dataset.repo_id=project_kouro/robocasa_TurnOffSinkFaucet --dataset.root=/tmp/project-kouro-cache/data/TurnOffSinkFaucet/20250819/bb573179495466bd/lerobot --dataset.episodes=\[0\,1\,2\,3\,4\,5\,6\,7\,8\,9\,10\,11\,12\,13\,14\,15\,16\,17\,18\,19\,20\,21\,22\,23\,24\,25\,26\,27\,28\,29\,30\,31\,32\,33\,34\,35\,36\,37\,38\,39\,40\,41\,42\,43\,44\,45\,46\,47\,48\,49\,50\,51\,52\,53\,54\,55\,56\,57\,58\,59\,60\,61\,62\,63\,64\,65\,66\,67\,68\,69\,70\,71\,72\,73\,74\,75\,76\,77\,78\,79\,80\,81\,82\,83\,84\,85\,86\,87\,88\,89\,90\,91\,92\,93\,94\,95\,96\,97\,98\,99\] --dataset.video_backend=pyav --env.type=robocasa --env.task=TurnOffSinkFaucet --env.split=pretrain --env.obj_registries=\[objaverse\,lightwheel\] --output_dir=/mnt/data/nas/hufangchi/projects/project_kouro/checkpoints/robocasa/TurnOffSinkFaucet/diffusion/DP_TurnOffSinkFaucet_baseline --job_name=DP_TurnOffSinkFaucet_baseline --steps=20000 --batch_size=32 --num_workers=8 --prefetch_factor=4 --persistent_workers=true --log_freq=100 --save_freq=2000 --eval_freq=2000 --eval.batch_size=1 --eval.n_episodes=5 --eval.use_async_envs=false --seed=42 --wandb.enable=false
+```

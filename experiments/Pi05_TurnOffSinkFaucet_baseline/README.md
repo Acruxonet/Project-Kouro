@@ -2,8 +2,8 @@
 
 ## 实验目的
 
-将 LeRobot 的原始 Pi05 flow-matching policy 从本机已有的官方 LIBERO-adapted base
-checkpoint 迁移到 RoboCasa `TurnOffSinkFaucet`，建立预训练 Vision-Language-Action baseline。
+将 LeRobot 的原始 Pi05 flow-matching policy 从官方通用 `lerobot/pi05_base`
+checkpoint fine-tune 到 RoboCasa `TurnOffSinkFaucet`，建立预训练 Vision-Language-Action baseline。
 本实验默认 full fine-tuning：不冻结 vision encoder，也不只训练 action expert。
 
 这里的实现是 LeRobot 对 OpenPI Pi0.5 continuous flow-matching action head 的直接 PyTorch port。
@@ -17,7 +17,7 @@ checkpoint 迁移到 RoboCasa `TurnOffSinkFaucet`，建立预训练 Vision-Langu
 - 任务名：`TurnOffSinkFaucet`。
 - 训练数据 split：`pretrain`；RoboCasa eval split：`pretrain`。
 - 评测 object registries：`[objaverse, lightwheel]`。
-- 训练中评测：每 10,000 steps 做 5 episodes。
+- 训练中评测：每 2,000 steps 做 5 episodes。
 - 最终评测：训练结束后自动做 50 episodes。
 
 本实验使用前 100 个 episode，共 11,608 frames。Pi05 没有 `drop_n_last_frames` 配置，因此
@@ -67,9 +67,9 @@ rotation 6D 使用 `[R00,R10,R20,R01,R11,R21]`。12D action 保持 RoboCasa EEF+
 本任务真正变化的 action 是 `[5:11]` 的 6D EEF Delta，其余维度为常量；Pi05 仍预测完整
 12D。完整参考系和 controller scaling 见 [`../../data/README.md`](../../data/README.md)。
 
-### 从 LIBERO 8D/7D 迁移到 RoboCasa 20D/12D
+### 从通用 base schema 适配到 RoboCasa 20D/12D
 
-默认 checkpoint 的旧 schema 是两路图像、8D state 和 7D action。adapter 传入
+通用 `pi05_base` checkpoint 声明三路 224×224 图像、32D state 和 32D action。adapter 传入
 `--policy.input_features=null`，LeRobot factory 随后从当前 dataset 重建：
 
 ```text
@@ -78,8 +78,8 @@ output_features = action(12)
 ```
 
 Pi05 内部固定 `max_state_dim=max_action_dim=32`，所以 state20/action12 都在上限内。action
-进入网络前从 12D zero-pad 到 32D，网络输出 32D 后只取前 12D；旧 checkpoint 的 8D/7D
-feature 声明不会直接套到 RoboCasa。
+进入网络前从 12D zero-pad 到 32D，网络输出 32D 后只取前 12D。checkpoint 中的原 camera
+keys 也不会直接套到 RoboCasa；当前 dataset 的 left、eye-in-hand、right 三路真实相机会取代它们。
 
 ## Policy 核心代码与 checkpoint
 
@@ -102,29 +102,45 @@ KOURO_POLICY_DIR=policy/pi05
 - [`_shared/rtc/`](../../policy/pi05/_shared/rtc/)：可选 Real-Time Chunking；本 baseline 的
   `rtc_config=null`，不启用 RTC。
 
-源码来自本机 LeRobot commit `5c98e80430d4a747926b45893568e388105a2400`，仓库副本已与
-原文件逐字节核对。默认 checkpoint：
+源码基于本机 LeRobot commit `5c98e80430d4a747926b45893568e388105a2400`。模型结构、processor 和
+loss 保持该版实现；本项目只对 `from_pretrained()` 加入了 fail-closed 安全修改，防止权重
+加载失败时静默返回随机初始化模型。默认 checkpoint：
 
 ```text
-Hugging Face ID: lerobot/pi05_libero
-revision: a217bfd3b14673cf2ce597e69997ab21866438dd
+Hugging Face ID: lerobot/pi05_base
+revision: b211f3d44c36b6acfcf7ae94a64e8e96f75a64ba
 model.safetensors: 14,467,165,872 bytes（约 13.5 GiB）
 ```
 
-这是 model card 指定用于下游 fine-tune 的 base，不是
-`lerobot/pi05_libero_finetuned`。后者是 LIBERO-specific 结果，不作为本实验默认起点。路径和
+它是 LeRobot model card 标记用于下游 fine-tune 的
+通用 base，不是 `lerobot/pi05_libero`，也不是 `lerobot/pi05_libero_finetuned`。后两者都不作为
+本 RoboCasa baseline 的起点。路径和
 revision 见 [`../../artifacts/pretrained/pi05/README.md`](../../artifacts/pretrained/pi05/README.md)。
+
+`config.env` 显式固定 repo ID、revision 和权重 byte size；启动时 adapter 会同时校验
+HF cache 目录名、revision、`config.json`、pre/postprocessor 和 `model.safetensors`。任何一项不符都会
+立即停止，不会回退到 LIBERO checkpoint，也不会从头训练。正常日志必须出现：
+
+```text
+Loading pretrained Pi05 base: repo=lerobot/pi05_base revision=b211f3d...
+Verified pretrained snapshot: .../models--lerobot--pi05_base/snapshots/b211f3d...
+Loading pretrained weights from: ...
+All keys loaded successfully!
+```
+
+项目内的 `PI05Policy.from_pretrained()` 也已改为 fail-closed：如果 safetensors 解析、key
+remap 或 strict `state_dict` 加载失败，训练会直接报错终止，不再返回随机初始化模型。
 
 ## Processor：图像、state、语言和 action
 
-当前 `batch_size=4`、`chunk_size=50`。processor 与模型之间的主要 tensor 为：
+当前 `batch_size=32`、`chunk_size=50`。processor 与模型之间的主要 tensor 为：
 
 | 数据 | 外部 shape | Pi05 内部表示 |
 | --- | --- | --- |
-| 三路 image | 每个 `(4,3,256,256)` | resize/pad 至 224²，各自产生 256 image tokens |
-| state | `(4,20)` | quantile normalize 后离散成文本 token，不直接作为连续向量入模 |
-| task | 4 个字符串 | 与离散 state 拼成 prompt，tokenizer max length 200 |
-| action | `(4,50,12)` | quantile normalize 后 pad 为 `(4,50,32)` |
+| 三路 image | 每个 `(32,3,256,256)` | resize/pad 至 224²，各自产生 256 image tokens |
+| state | `(32,20)` | quantile normalize 后离散成文本 token，不直接作为连续向量入模 |
+| task | 32 个字符串 | 与离散 state 拼成 prompt，tokenizer max length 200 |
+| action | `(32,50,12)` | quantile normalize 后 pad 为 `(32,50,32)` |
 
 ### 1. Quantile normalization
 
@@ -163,6 +179,7 @@ PaliGemma。这是修改 state encoder 或语言接口时必须注意的边界�
 
 图像在 normalization processor 中保持 identity，随后 resize-with-pad 到 224×224 并从
 `[0,1]` 映射到 `[-1,1]`。三路真实相机各有有效 mask；`empty_cameras=0`，不会人为补空相机。
+这是有意的：RoboCasa 已经提供需要的三路视角，而通用 `pi05_base` 的 checkpoint schema 也是三路图像。
 
 ## 模型模块
 
@@ -294,9 +311,9 @@ x_(t+dt) = x_t + dt * v_hat(x_t, t)
 
 | 参数 | 值 |
 | --- | ---: |
-| training steps | 100,000 |
-| batch size | 4 |
-| DataLoader workers | 4 |
+| training steps | 20,000 |
+| batch size | 32 |
+| DataLoader workers | 8 |
 | seed | 42 |
 | dtype | bfloat16 mixed with selected FP32 modules |
 | state rotation | rotation 6D |
@@ -305,10 +322,13 @@ x_(t+dt) = x_t + dt * v_hat(x_t, t)
 | max state / action dim | 32 / 32 |
 | gradient checkpointing | true |
 | full fine-tuning | true |
-| checkpoint + inline eval interval | 10,000 steps |
+| checkpoint + inline eval interval | 2,000 steps |
 | inline / final eval episodes | 5 / 50 |
 
-显存不足时优先将 `KOURO_BATCH_SIZE` 降为 1 或 2，或者建立
+当前 20k / batch 32 是第一轮设定；相比 30k / batch 64 recipe 更保守，LeRobot 会把
+30k scheduler 自动缩放到实际的 20k steps。但 4.143B full fine-tuning 对单卡显存要求仍远高于
+其他两个 policy。若目标机器无法容纳，可在启动命令前覆盖
+`KOURO_BATCH_SIZE=4`，或者建立
 `train_expert_only=true` / `freeze_vision_encoder=true` 的新实验；这些都会改变 baseline，应该
 复制为新的扁平 experiment variant，而不是覆盖本目录结果。
 
@@ -351,3 +371,15 @@ bash scripts/train_turnoff_sink_faucet.sh --dry-run
 - 冻结代码：`policy_snapshot/`、`policy_adapter_snapshot.sh`、`environment_snapshot/`；
 - 训练监控：`train.log`、`status.env`、`tensorboard/`；
 - RoboCasa 结果：`eval/<timestamp>/`。
+
+## 本次实际展开命令
+
+- 启动时间：`2026-08-17T14:28:32Z`
+- Dataset cache：`/tmp/project-kouro-cache/data/TurnOffSinkFaucet/20250819/bb573179495466bd/lerobot`
+- Code cache：`/tmp/project-kouro-cache/code/lerobot-d2d4f33a3555-kouro-5d71f459993b`
+- Policy：`pi05` from `/mnt/data/nas/hufangchi/projects/project_kouro/policy/pi05`
+- Checkpoint：`/mnt/data/nas/hufangchi/projects/project_kouro/checkpoints/robocasa/TurnOffSinkFaucet/pi05/Pi05_TurnOffSinkFaucet_baseline`
+
+```bash
+/mnt/data/nas/hufangchi/applications/conda_envs/Robotwin/bin/python3.12 -m lerobot.scripts.lerobot_train --policy.discover_packages_path=lerobot.policies.pi05 --policy.path=/tmp/project-kouro-cache/models/pi05/d64b4ab0ecf49fc3/model --policy.device=cuda --policy.use_amp=false --policy.push_to_hub=false --policy.input_features=null --policy.dtype=bfloat16 --policy.chunk_size=50 --policy.n_action_steps=10 --policy.empty_cameras=0 --policy.gradient_checkpointing=true --policy.train_expert_only=false --policy.freeze_vision_encoder=false --policy.compile_model=false --dataset.repo_id=project_kouro/robocasa_TurnOffSinkFaucet --dataset.root=/tmp/project-kouro-cache/data/TurnOffSinkFaucet/20250819/bb573179495466bd/lerobot --dataset.episodes=\[0\,1\,2\,3\,4\,5\,6\,7\,8\,9\,10\,11\,12\,13\,14\,15\,16\,17\,18\,19\,20\,21\,22\,23\,24\,25\,26\,27\,28\,29\,30\,31\,32\,33\,34\,35\,36\,37\,38\,39\,40\,41\,42\,43\,44\,45\,46\,47\,48\,49\,50\,51\,52\,53\,54\,55\,56\,57\,58\,59\,60\,61\,62\,63\,64\,65\,66\,67\,68\,69\,70\,71\,72\,73\,74\,75\,76\,77\,78\,79\,80\,81\,82\,83\,84\,85\,86\,87\,88\,89\,90\,91\,92\,93\,94\,95\,96\,97\,98\,99\] --dataset.video_backend=pyav --env.type=robocasa --env.task=TurnOffSinkFaucet --env.split=pretrain --env.obj_registries=\[objaverse\,lightwheel\] --output_dir=/mnt/data/nas/hufangchi/projects/project_kouro/checkpoints/robocasa/TurnOffSinkFaucet/pi05/Pi05_TurnOffSinkFaucet_baseline --job_name=Pi05_TurnOffSinkFaucet_baseline --steps=20000 --batch_size=32 --num_workers=8 --prefetch_factor=4 --persistent_workers=true --log_freq=100 --save_freq=2000 --eval_freq=2000 --eval.batch_size=1 --eval.n_episodes=5 --eval.use_async_envs=false --seed=42 --wandb.enable=false
+```

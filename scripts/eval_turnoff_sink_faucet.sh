@@ -77,7 +77,6 @@ eval_id=$(date -u +%Y%m%d-%H%M%S)
 eval_dir="$experiment_dir/eval/$eval_id"
 eval_command=(
     "$python_bin" -m lerobot.scripts.lerobot_eval
-    --policy.discover_packages_path="lerobot.policies.$policy_type"
     --policy.path="$policy_checkpoint"
     --policy.device=cuda
     --env.type=robocasa
@@ -118,6 +117,7 @@ PY
 
 mkdir -p "$eval_dir"
 eval_command_snapshot=$(printf '%q ' "${eval_command[@]}")
+eval_command_snapshot=${eval_command_snapshot% }
 {
     printf '# Evaluation %s\n\n' "$eval_id"
     printf -- '- Training run: `%s`\n' "$run_id"

@@ -66,9 +66,11 @@ policy/
 启动时会自动用该目录替换本地 LeRobot 缓存的
 `lerobot/policies/<type>/`，并在实验中保存 `policy_snapshot/`。如果目录含
 `normalization.py`，它还会覆盖训练实际使用的 LeRobot normalize processor。
-训练和 eval 命令会自动传入 `policy.discover_packages_path`，因此新 policy 只要按
-LeRobot 约定在 configuration 中注册 `PreTrainedConfig`，并提供对应的 modeling 和
-processor，不需要再修改 LeRobot 中央 factory。
+使用 `policy.type` 从头训练时，launcher 会传入 `policy.discover_packages_path`，因此新
+policy 只要按 LeRobot 约定在 configuration 中注册 `PreTrainedConfig`，并提供对应的
+modeling 和 processor，不需要再修改 LeRobot 中央 factory。使用 `policy.path` 加载预训练
+checkpoint 时不传 discovery 参数：LeRobot 会将 `policy.*` CLI 参数作为 checkpoint config
+override，再传 discovery 会被错误地解析成未知字段。
 
 如果原始 policy 还依赖 `lerobot/policies/` 下的同级文件，将其保存在
 `policy/<type>/_shared/`。缓存脚本会将 `_shared` 中的文件按原层级安装到
@@ -92,17 +94,18 @@ KOURO_GPU=0 bash scripts/tmux_train_turnoff_sink_faucet.sh
 
 ## 已加入的原始 policy
 
-`act/` 保存原始 LeRobot ACT 的 configuration、modeling 和 processor。对应 adapter
-默认保留原始值：`chunk_size=100`、`n_action_steps=100`、ResNet-18 ImageNet
-backbone、VAE 和 `kl_weight=10`。ACT 从头训练，没有强制的 policy checkpoint。
+`act/` 保存原始 LeRobot ACT 的 configuration、modeling 和 processor。adapter 的模型
+默认值仍是 `chunk_size=100`、`n_action_steps=100`、ResNet-18 ImageNet backbone、VAE 和
+`kl_weight=10`；当前 ACT baseline 在它自己的 `config.env` 中显式覆盖为 `64/32`。
+ACT 从头训练，没有强制的 policy checkpoint。
 
 `pi05/` 保存原始 LeRobot Pi05 的 configuration、modeling 和 processor，以及它直接
 依赖的原始 `pi_gemma.py` 和 `rtc/` 源码。Pi05 adapter 默认从本机已有的
-`lerobot/pi05_libero` base revision 开始 fine-tune，并自动将权重和 PaliGemma tokenizer
+`lerobot/pi05_base` pinned revision 开始 fine-tune，并自动将权重和 PaliGemma tokenizer
 缓存到容器本地盘。权重盘点见
 [`artifacts/pretrained/pi05/README.md`](../artifacts/pretrained/pi05/README.md)。
 
-Pi05 从 LIBERO checkpoint 迁移到 RoboCasa 时，adapter 会设置 `input_features=null`，
+Pi05 从通用 base 适配到 RoboCasa 时，adapter 会设置 `input_features=null`，
 让 LeRobot 从当前数据推断三路图像和 20D rotation-6D state；12D action 也会从数据
 重建。内部 `max_state_dim=max_action_dim=32` 足以容纳这两个维度。
 
@@ -112,3 +115,5 @@ Diffusion、ACT 和 Pi05 可以共用同一份缓存而各自选择不同 normal
 
 三套 policy 源码均来自本地 LeRobot commit
 `5c98e80430d4a747926b45893568e388105a2400`，ACT/Pi05 复制时对应源路径无未提交修改。
+Pi05 在本项目内额外将 pretrained loader 改为 fail-closed：任何权重解析或 strict
+`state_dict` 加载错误都会终止训练，而不是回退到随机初始化。
